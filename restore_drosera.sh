@@ -271,18 +271,21 @@ check_status "Тестирование Docker"
 # Установка CLI инструментов
 print_header "УСТАНОВКА CLI ИНСТРУМЕНТОВ"
 
-# Drosera CLI
+# Drosera CLI - исправленная версия
 print_color $YELLOW "Установка Drosera CLI..."
+
+# Сначала попробуем стандартный установщик
 for attempt in 1 2 3; do
     if curl -L https://app.drosera.io/install | bash; then
+        print_color $GREEN "✓ Установка через стандартный инсталлер успешна"
         break
     else
         if [ $attempt -eq 3 ]; then
-            print_color $RED "Не удалось установить Drosera CLI через installer"
-            break
+            print_color $YELLOW "Стандартный инсталлер не сработал, пробуем альтернативные методы..."
+        else
+            print_color $YELLOW "Повторная попытка установки через стандартный инсталлер..."
+            sleep 5
         fi
-        print_color $YELLOW "Повторная попытка установки Drosera CLI..."
-        sleep 5
     fi
 done
 
@@ -298,20 +301,111 @@ elif command -v droseraup >/dev/null 2>&1; then
     droseraup
 else
     print_color $YELLOW "droseraup не найден, устанавливаем напрямую..."
-    # Прямая установка если droseraup не работает
+    
+    # Создаем директорию
     mkdir -p /root/.drosera/bin
-    for attempt in 1 2 3; do
-        if wget -q -O /root/.drosera/bin/drosera https://github.com/drosera-network/drosera-cli/releases/latest/download/drosera-x86_64-unknown-linux-gnu; then
-            chmod +x /root/.drosera/bin/drosera
-            break
-        else
-            if [ $attempt -eq 3 ]; then
-                print_color $RED "Не удалось скачать Drosera CLI"
-                exit 1
+    
+    # Попробуем разные источники для загрузки
+    DOWNLOAD_SUCCESS=false
+    
+    # Список возможных URL для скачивания
+    DOWNLOAD_URLS=(
+        "https://github.com/drosera-network/drosera-cli/releases/latest/download/drosera-x86_64-unknown-linux-gnu"
+        "https://github.com/drosera-network/drosera/releases/latest/download/drosera-x86_64-unknown-linux-gnu"
+        "https://github.com/drosera-network/drosera-cli/releases/download/v0.1.0/drosera-x86_64-unknown-linux-gnu"
+    )
+    
+    for url in "${DOWNLOAD_URLS[@]}"; do
+        print_color $YELLOW "Попытка скачивания с: $url"
+        if wget -q -O /root/.drosera/bin/drosera "$url" 2>/dev/null; then
+            if [ -s "/root/.drosera/bin/drosera" ]; then
+                chmod +x /root/.drosera/bin/drosera
+                DOWNLOAD_SUCCESS=true
+                print_color $GREEN "✓ Успешно скачано с $url"
+                break
+            else
+                print_color $YELLOW "Файл пустой, пробуем следующий URL..."
+                rm -f /root/.drosera/bin/drosera
             fi
-            sleep 5
+        else
+            print_color $YELLOW "Не удалось скачать с $url"
         fi
     done
+    
+    # Если не удалось скачать, пробуем curl
+    if [ "$DOWNLOAD_SUCCESS" = false ]; then
+        for url in "${DOWNLOAD_URLS[@]}"; do
+            print_color $YELLOW "Попытка скачивания через curl с: $url"
+            if curl -L -o /root/.drosera/bin/drosera "$url" 2>/dev/null; then
+                if [ -s "/root/.drosera/bin/drosera" ]; then
+                    chmod +x /root/.drosera/bin/drosera
+                    DOWNLOAD_SUCCESS=true
+                    print_color $GREEN "✓ Успешно скачано через curl с $url"
+                    break
+                else
+                    print_color $YELLOW "Файл пустой, пробуем следующий URL..."
+                    rm -f /root/.drosera/bin/drosera
+                fi
+            else
+                print_color $YELLOW "Не удалось скачать через curl с $url"
+            fi
+        done
+    fi
+    
+    # Если все еще не удалось, пробуем установить через cargo (если доступен)
+    if [ "$DOWNLOAD_SUCCESS" = false ]; then
+        print_color $YELLOW "Пробуем установить через альтернативные методы..."
+        
+        # Проверяем наличие cargo
+        if command -v cargo >/dev/null 2>&1; then
+            print_color $YELLOW "Найден cargo, устанавливаем через него..."
+            cargo install --git https://github.com/drosera-network/drosera-cli drosera --bin drosera --root /root/.drosera 2>/dev/null
+            if [ -f "/root/.drosera/bin/drosera" ]; then
+                DOWNLOAD_SUCCESS=true
+                print_color $GREEN "✓ Успешно установлено через cargo"
+            fi
+        fi
+    fi
+    
+    # Последняя попытка - попробуем собрать из исходников
+    if [ "$DOWNLOAD_SUCCESS" = false ]; then
+        print_color $YELLOW "Последняя попытка - установка Rust и сборка из исходников..."
+        
+        # Устанавливаем Rust если его нет
+        if ! command -v rustc >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source /root/.cargo/env
+        fi
+        
+        # Пробуем клонировать и собрать
+        cd /tmp
+        if git clone https://github.com/drosera-network/drosera-cli.git 2>/dev/null; then
+            cd drosera-cli
+            if cargo build --release 2>/dev/null; then
+                cp target/release/drosera /root/.drosera/bin/
+                chmod +x /root/.drosera/bin/drosera
+                DOWNLOAD_SUCCESS=true
+                print_color $GREEN "✓ Успешно собрано из исходников"
+            fi
+            cd ..
+            rm -rf drosera-cli
+        fi
+        cd ~
+    fi
+    
+    if [ "$DOWNLOAD_SUCCESS" = false ]; then
+        print_color $RED "✗ Критическая ошибка: не удалось установить Drosera CLI никаким способом"
+        print_color $YELLOW "Возможные причины:"
+        print_color $YELLOW "1. Проблемы с интернет-соединением"
+        print_color $YELLOW "2. Изменились URL для скачивания"
+        print_color $YELLOW "3. Временные проблемы с GitHub"
+        print_color $YELLOW ""
+        print_color $YELLOW "Рекомендации:"
+        print_color $YELLOW "1. Проверьте интернет-соединение: ping google.com"
+        print_color $YELLOW "2. Попробуйте запустить скрипт позже"
+        print_color $YELLOW "3. Установите вручную с GitHub: https://github.com/drosera-network/drosera-cli/releases"
+        exit 1
+    fi
 fi
 
 # Обновляем PATH
@@ -322,23 +416,22 @@ source /root/.bashrc 2>/dev/null || true
 # Проверяем установку
 if [ -f "/root/.drosera/bin/drosera" ]; then
     print_color $GREEN "✓ Drosera CLI успешно установлен"
+    # Проверяем что файл исполняемый и не поврежден
+    if /root/.drosera/bin/drosera --version >/dev/null 2>&1; then
+        print_color $GREEN "✓ Drosera CLI работает корректно"
+    else
+        print_color $YELLOW "⚠ Drosera CLI установлен, но могут быть проблемы с запуском"
+    fi
 elif command -v drosera >/dev/null 2>&1; then
     print_color $GREEN "✓ Drosera CLI найден в системе"
-else
-    print_color $RED "✗ Не удалось установить Drosera CLI"
-    print_color $YELLOW "Попробуем установить вручную..."
-    
-    # Последняя попытка - прямое скачивание
-    mkdir -p /root/.drosera/bin
-    curl -L -o /root/.drosera/bin/drosera "https://github.com/drosera-network/drosera-cli/releases/latest/download/drosera-x86_64-unknown-linux-gnu"
-    chmod +x /root/.drosera/bin/drosera
-    
-    if [ -f "/root/.drosera/bin/drosera" ]; then
-        print_color $GREEN "✓ Drosera CLI установлен вручную"
+    if drosera --version >/dev/null 2>&1; then
+        print_color $GREEN "✓ Drosera CLI работает корректно"
     else
-        print_color $RED "✗ Критическая ошибка: не удалось установить Drosera CLI"
-        exit 1
+        print_color $YELLOW "⚠ Drosera CLI найден, но могут быть проблемы с запуском"
     fi
+else
+    print_color $RED "✗ Критическая ошибка: Drosera CLI не найден после установки"
+    exit 1
 fi
 
 check_status "Установка Drosera CLI"
